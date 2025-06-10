@@ -10,12 +10,27 @@
             padding: 20px;
             background-color: #34495E;
         }
+        #site-title {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #FFFFFF;
+            text-shadow: 2px 2px 4px #000000;
+            letter-spacing: 2px;
+            transition: color 0.3s ease;
+        }
+        #site-title:hover {
+            color: #FFD700;
+        }
         #heatmap, #linechart, #piechart, #barchart {
             background-color: #FAFAFA;
             padding: 10px;
             border: 1px solid #ccc;
             border-radius: 5px;
             position: absolute;
+            overflow: hidden;
         }
         #heatmap {
             top: 20px;
@@ -54,11 +69,8 @@
             top: 880px;
             left: 200px;
         }
-        .kill-dot {
-            fill: red;
+        .heatmap-cell {
             fill-opacity: 0.7;
-            stroke: black;
-            stroke-width: 1;
         }
         line {
             shape-rendering: crispEdges;
@@ -91,37 +103,188 @@
             border: 1px solid #ccc;
             border-radius: 5px;
         }
+        #team-selector {
+            position: absolute;
+            top: 20px;
+            right: 200px;
+            padding: 5px;
+            font-size: 14px;
+            background-color: #003366;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            z-index: 10;
+            color: #FFFFFF;
+        }
+        #player-selector{
+            position: absolute;
+            background-color: #003366;
+            top: 460px;
+            right: 200px;
+            color: #FFFFFF;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 5px;
+            font-size: 14px;
+        }
+        #filter-controls {
+            position: absolute;
+            top: 465px;
+            right: 320px;
+        }
+        #filter-controls label {
+            margin-right: 15px;
+            color: #003366;
+            font-size: 14px;
+        }
+        .tooltip {
+            position: fixed;
+            background: rgba(0, 0, 0, 0.85);
+            color: white;
+            padding: 6px 10px;
+            font-size: 15px;
+            border-radius: 4px;
+            pointer-events: none;
+            display: none;
+            transform: translateX(-50%);
+            z-index: 1000;
+        }
+        .data-point {
+            fill: white;
+            stroke: black;
+            stroke-width: 1;
+            opacity: 0.7;
+            pointer-events: all;
+        }
     </style>
 </head>
 <body>
+    <div id="site-title">CSstats</div>
     <div id="error-message"></div>
     <div id="pie-error"></div>
     <div id="heatmap"></div>
     <div id="linechart"></div>
+    <select id="team-selector">
+        <option value="both">Both Teams</option>
+        <option value="teamA">Team A</option>
+        <option value="teamB">Team B</option>
+    </select>
     <div id="piechart"></div>
     <div id="barchart"></div>
+    <select id="player-selector">
+        <option value="all">Select player</option>
+    </select>
     <select id="match-selector"></select>
+    <div id="tooltip" class="tooltip"></div>
+    <div id="filter-controls">
+        <label><input type="checkbox" id="bodyshots"> Bodyshots</label>
+        <label><input type="checkbox" id="headshots"> Headshots</label>
+    </div>
 
     <script>
-        // List of available match files (assumed to be in the same folder)
+        let currentMatchData = null;
+
         const matchFiles = [
             "falcons-vs-gamerlegion-m1-ancient.json",
             "falcons-vs-gamerlegion-m2-nuke.json",
             "falcons-vs-gamerlegion-m3-inferno.json"
-            
         ];
 
-        const matchSelector = d3.select("#match-selector");
+        const MAP_CONFIGS = {
+            "ancient": {
+                image: "maps/de_ancient.png",
+                pos_x: -3000,
+                pos_y: 2500,
+                scale: 6.0
+            },
+            "nuke": {
+                image: "maps/de_nuke.webp",
+                pos_x: -3453,
+                pos_y: 2887,
+                scale: 7.0
+            },
+            "inferno": {
+                image: "maps/de_inferno.png",
+                pos_x: -2087,
+                pos_y: 3870,
+                scale: 4.9
+            },
+            "anubis": {
+                image: "maps/de_anubis.png",
+                pos_x: -1700,
+                pos_y: 2400,
+                scale: 5.5
+            },
+            "dust2": {
+                image: "maps/de_dust2.webp",
+                pos_x: -2476,
+                pos_y: 3239,
+                scale: 4.4
+            },
+            "mirage": {
+                image: "maps/de_mirage.webp",
+                pos_x: -3230,
+                pos_y: 1710,
+                scale: 5.2
+            },
+            "overpass": {
+                image: "maps/de_overpass.webp",
+                pos_x: -4831,
+                pos_y: 1781,
+                scale: 5.2
+            },
+            "train": {
+                image: "maps/de_train.webp",
+                pos_x: -2477,
+                pos_y: 2391,
+                scale: 4.7
+            },
+            "vertigo": {
+                image: "maps/de_vertigo.webp",
+                pos_x: -3169,
+                pos_y: 1765,
+                scale: 5.5
+            }
+        };
 
-        // Function to load and render charts for a given match file
+
+        const matchSelector = d3.select("#match-selector");
+        const teamSelector = d3.select("#team-selector");
+
+        function gameToImageCoords(gameX, gameY, mapConfig, imageWidth, imageHeight) {
+            // Calculate world coordinates
+            const worldX = gameX - mapConfig.pos_x;
+            const worldY = mapConfig.pos_y - gameY;
+            
+            // Calculate pixel coordinates with proper scaling
+            // The 1024 factor is related to the original map scale in the game
+            const pixelX = (worldX / mapConfig.scale) * (imageWidth / 1024);
+            const pixelY = (worldY / mapConfig.scale) * (imageHeight / 1024);
+            
+            // Ensure coordinates are within bounds
+            return {
+                x: Math.max(0, Math.min(imageWidth, pixelX)),
+                y: Math.max(0, Math.min(imageHeight, pixelY))
+            };
+        }
+
         function loadMatch(file) {
-            // Clear existing charts
             d3.select("#heatmap").selectAll("*").remove();
             d3.select("#linechart").selectAll("*").remove();
             d3.select("#piechart").selectAll("*").remove();
             d3.select("#barchart").selectAll("*").remove();
             d3.select("#error-message").text("");
             d3.select("#pie-error").text("");
+
+            // Clear and reset team selector
+            const teamSelector = d3.select("#team-selector");
+            teamSelector.selectAll("option").remove();
+            teamSelector.append("option").attr("value", "").text("Select team");
+            teamSelector.append("option").attr("value", "both").text("Both Teams");
+            
+            // Clear and reset player selector
+            const playerSelector = d3.select("#player-selector");
+            playerSelector.selectAll("option").remove();
+            playerSelector.append("option").attr("value", "all").text("Select player");
 
             fetch(file)
                 .then(response => {
@@ -131,23 +294,55 @@
                     return response.json();
                 })
                 .then(data => {
+                    currentMatchData = data;
                     const matchData = data;
+                    const mapNameFromFileName = file.replace(/falcons-vs-gamerlegion-m\d+-|.json/g, '').replace(/de_/, '');
+                    const currentMapConfig = MAP_CONFIGS[mapNameFromFileName];
 
-                    // Team names and colors for consistency
+                    if (!currentMapConfig) {
+                        d3.select("#error-message").text(`Error: Map configuration not found for ${mapNameFromFileName}. Please add it to MAP_CONFIGS.`);
+                        return;
+                    }
+
                     const teams = [
-                        { name: "Team Falcons", color: "#003366" }, // Team A - Blue
-                        { name: "GamerLegion", color: "#FD7702" }   // Team B - Orange
+                        { name: matchData.teamA?.name || "Team A", color: "#003366" },
+                        { name: matchData.teamB?.name || "Team B", color: "#FD7702" }
                     ];
 
-                    // Heatmap for kill locations (Top-Left) with image as background
+                    // Update team selector with actual team names
+                    teamSelector.append("option").attr("value", "teamA").text(teams[0].name);
+                    teamSelector.append("option").attr("value", "teamB").text(teams[1].name);
+                    
+                    // Extract unique player names from kills data
+                    const players = new Set();
+                    matchData.kills.forEach(kill => {
+                        if (kill.killerName) players.add(kill.killerName);
+                        if (kill.victimName) players.add(kill.victimName);
+                    });
+                    
+                    // Add player options to selector
+                    Array.from(players).sort().forEach(player => {
+                        playerSelector.append("option")
+                            .attr("value", player)
+                            .text(player);
+                    });
+                    
+                    // Add event listener to player selector
+                    playerSelector.on("change", function() {
+                        updateBarChart(matchData);
+                    });
+
+                    const heatmapWidth = 500;
+                    const heatmapHeight = 500;
+
                     const heatmapSvg = d3.select("#heatmap").append("svg")
-                        .attr("width", 500)
-                        .attr("height", 500);
+                        .attr("width", heatmapWidth)
+                        .attr("height", heatmapHeight);
 
                     heatmapSvg.append("image")
-                        .attr("xlink:href", "ancient_map.png")
-                        .attr("width", 500)
-                        .attr("height", 500)
+                        .attr("xlink:href", currentMapConfig.image)
+                        .attr("width", heatmapWidth)
+                        .attr("height", heatmapHeight)
                         .attr("x", 0)
                         .attr("y", 0)
                         .attr("opacity", 0)
@@ -155,211 +350,106 @@
                         .duration(1000)
                         .attr("opacity", 0.9);
 
-                    const heatmapData = matchData.kills.map(kill => [kill.victimX, kill.victimY]);
-                    heatmapSvg.selectAll(".dot")
-                        .data(heatmapData)
-                        .enter().append("circle")
-                        .attr("class", "kill-dot")
-                        .attr("cx", d => (d[0] + 3000) / 12)
-                        .attr("cy", d => (d[1] + 3000) / 12)
-                        .attr("r", 0)
+                    const killsData = matchData.kills || [];
+
+                    const imageKills = killsData.map(kill => 
+                        gameToImageCoords(kill.victimX, kill.victimY, currentMapConfig, heatmapWidth, heatmapHeight)
+                    );
+                    console.log("Image Kills:", imageKills);
+
+                    const cellSize = Math.max(5, Math.min(20, 500 / Math.sqrt(killsData.length) || 10));
+                    const numCols = Math.floor(heatmapWidth / cellSize);
+                    const numRows = Math.floor(heatmapHeight / cellSize);
+
+                    const grid = Array(numRows).fill(0).map(() => Array(numCols).fill(0));
+
+                    imageKills.forEach(p => {
+                        const col = Math.floor(p.x / cellSize);
+                        const row = Math.floor(p.y / cellSize);
+                        if (row >= 0 && row < numRows && col >= 0 && col < numCols) {
+                            grid[row][col]++;
+                        }
+                    });
+
+                    let maxCount = 0;
+                    const heatmapCells = [];
+                    for (let r = 0; r < numRows; r++) {
+                        for (let c = 0; c < numCols; c++) {
+                            const count = grid[r][c];
+                            if (count > maxCount) maxCount = count;
+                            if (count > 0) {
+                                heatmapCells.push({
+                                    x: c * cellSize,
+                                    y: r * cellSize,
+                                    width: cellSize,
+                                    height: cellSize,
+                                    count: count
+                                });
+                            }
+                        }
+                    }
+
+                    const colorScale = d3.scale.linear()
+                        .domain([0, maxCount])
+                        .range(["#fee5d9", "#a50f15"]);
+
+                    heatmapSvg.selectAll(".heatmap-cell")
+                        .data(heatmapCells)
+                        .enter().append("rect")
+                        .attr("class", "heatmap-cell")
+                        .attr("x", d => d.x)
+                        .attr("y", d => d.y)
+                        .attr("width", d => d.width)
+                        .attr("height", d => d.height)
+                        .attr("fill", d => colorScale(d.count))
                         .attr("opacity", 0)
                         .transition()
                         .duration(500)
-                        .attr("r", 5)
-                        .attr("opacity", 1);
+                        .attr("opacity", 0.7);
 
-                    // Line chart for economy (Right Side)
+                    // Create line chart with team selection functionality
+                    createLineChart(matchData, teams);
+
                     const rounds = matchData.rounds || [];
                     if (rounds.length === 0) {
-                        throw new Error("No rounds data found in JSON.");
+                        d3.select("#linechart").append("text")
+                            .attr("x", 10)
+                            .attr("y", 20)
+                            .attr("fill", "red")
+                            .text("No rounds data available for line chart.");
+                        return;
                     }
-                    const lineData = rounds.map((round, index) => ({
-                        x: index + 1,
-                        teamA: round.teamAStartMoney,
-                        teamB: round.teamBStartMoney
-                    }));
 
-                    const svgWidth = 600;
-                    const svgHeight = 400;
-                    const margin = {top: 20, right: 20, bottom: 50, left: 50};
-                    const chartWidth = 400;
-                    const chartHeight = 350 - margin.top - margin.bottom;
-
-                    const translateX = (svgWidth - chartWidth - margin.left - margin.right) / 2 + margin.left;
-                    const translateY = margin.top;
-
-                    const lineSvg = d3.select("#linechart").append("svg")
-                        .attr("width", svgWidth)
-                        .attr("height", svgHeight);
-
-                    const chartGroup = lineSvg.append("g")
-                        .attr("transform", `translate(${translateX},${translateY})`);
-
-                    const xScale = d3.scale.linear()
-                        .domain([1, lineData.length])
-                        .range([0, chartWidth]);
-                    const xAxis = d3.svg.axis()
-                        .scale(xScale)
-                        .orient("bottom");
-                    const xAxisGroup = chartGroup.append("g")
-                        .attr("class", "axis")
-                        .attr("transform", `translate(0,${chartHeight})`)
-                        .call(xAxis);
-                    xAxisGroup.selectAll("text")
-                        .style("text-anchor", "end")
-                        .attr("dx", "-.8em")
-                        .attr("dy", ".15em")
-                        .attr("transform", "rotate(-45)");
-                    xAxisGroup
-                        .attr("opacity", 0)
-                        .transition()
-                        .duration(1000)
-                        .attr("opacity", 1);
-
-                    const maxMoney = d3.max(lineData, d => Math.max(d.teamA, d.teamB)) / 1000;
-                    const yScale = d3.scale.linear()
-                        .domain([0, Math.ceil(maxMoney / 10) * 10])
-                        .range([chartHeight, 0]);
-                    const yAxis = d3.svg.axis()
-                        .scale(yScale)
-                        .orient("left")
-                        .tickValues([0, 10, 20, 30, 40, 50])
-                        .tickFormat(d => d === 0 ? "0" : `${d}k`);
-                    chartGroup.append("g")
-                        .attr("class", "axis")
-                        .call(yAxis)
-                        .attr("opacity", 0)
-                        .transition()
-                        .duration(1000)
-                        .attr("opacity", 1);
-
-                    const xTicks = xScale.ticks ? xScale.ticks(lineData.length) : d3.range(1, lineData.length + 1);
-                    const yTicks = yScale.ticks ? yScale.ticks(5) : [0, 10, 20, 30, 40, 50];
-
-                    yTicks.forEach(yVal => {
-                        chartGroup.append("line")
-                            .attr("x1", 0)
-                            .attr("y1", yScale(yVal))
-                            .attr("x2", chartWidth)
-                            .attr("y2", yScale(yVal))
-                            .attr("stroke", "#ccc")
-                            .attr("stroke-width", 1)
-                            .attr("opacity", 0)
-                            .transition()
-                            .duration(1000)
-                            .attr("opacity", 0.85);
-                    });
-
-                    xTicks.forEach(xVal => {
-                        chartGroup.append("line")
-                            .attr("x1", xScale(xVal))
-                            .attr("y1", 0)
-                            .attr("x2", xScale(xVal))
-                            .attr("y2", chartHeight)
-                            .attr("stroke", "#ccc")
-                            .attr("stroke-width", 1)
-                            .attr("opacity", 0)
-                            .transition()
-                            .duration(1000)
-                            .attr("opacity", 0.85);
-                    });
-
-                    const lineA = d3.svg.line()
-                        .x(d => xScale(d.x))
-                        .y(d => yScale(d.teamA / 1000));
-                    const pathA = chartGroup.append("path")
-                        .datum(lineData)
-                        .attr("fill", "none")
-                        .attr("stroke", teams[0].color)
-                        .attr("stroke-width", 1.2)
-                        .attr("d", lineA(lineData))
-                        .attr("stroke-dasharray", function() { return this.getTotalLength(); })
-                        .attr("stroke-dashoffset", function() { return this.getTotalLength(); })
-                        .transition()
-                        .duration(2000)
-                        .attr("stroke-dashoffset", 0);
-
-                    const lineB = d3.svg.line()
-                        .x(d => xScale(d.x))
-                        .y(d => yScale(d.teamB / 1000));
-                    const pathB = chartGroup.append("path")
-                        .datum(lineData)
-                        .attr("fill", "none")
-                        .attr("stroke", teams[1].color)
-                        .attr("stroke-width", 1.2)
-                        .attr("d", lineB(lineData))
-                        .attr("stroke-dasharray", function() { return this.getTotalLength(); })
-                        .attr("stroke-dashoffset", function() { return this.getTotalLength(); })
-                        .transition()
-                        .duration(2000)
-                        .attr("stroke-dashoffset", 0);
-
-                    chartGroup.append("text")
-                        .attr("transform", `translate(${chartWidth/2},${chartHeight + margin.bottom - 10})`)
-                        .style("text-anchor", "middle")
-                        .text("Round")
-                        .attr("opacity", 0)
-                        .transition()
-                        .duration(1000)
-                        .attr("opacity", 1);
-                    chartGroup.append("text")
-                        .attr("transform", "rotate(-90)")
-                        .attr("y", -5 - margin.left)
-                        .attr("x", 0 - (chartHeight / 2))
-                        .attr("dy", "1em")
-                        .style("text-anchor", "middle")
-                        .text("Money ($)")
-                        .attr("opacity", 0)
-                        .transition()
-                        .duration(1000)
-                        .attr("opacity", 1);
-
-                    const lineLegend = chartGroup.append("g")
-                        .attr("class", "legend")
-                        .attr("transform", `translate(${chartWidth - 100}, 10)`);
-                    teams.forEach((team, i) => {
-                        const legendRow = lineLegend.append("g")
-                            .attr("transform", `translate(0, ${i * 20})`);
-                        legendRow.append("rect")
-                            .attr("x", 0)
-                            .attr("y", 0)
-                            .attr("width", 15)
-                            .attr("height", 15)
-                            .attr("fill", team.color);
-                        legendRow.append("text")
-                            .attr("x", 20)
-                            .attr("y", 12)
-                            .text(team.name);
-                        legendRow.attr("opacity", 0)
-                            .transition()
-                            .duration(1000)
-                            .attr("opacity", 1);
-                    });
-
-                    // Pie chart for won rounds (below heatmap)
                     const pieSvg = d3.select("#piechart").append("svg")
                         .attr("width", 500)
                         .attr("height", 300)
                         .append("g")
                         .attr("transform", "translate(150,150)");
 
+                    console.log("Round winners:", rounds.map(round => round.winnerTeamName));
+
                     const wins = rounds.reduce((acc, round) => {
-                        if (round.winnerTeamName === "Team Falcons") acc.teamA++;
-                        else if (round.winnerTeamName === "GamerLegion") acc.teamB++;
+                        const winner = round.winnerTeamName ? round.winnerTeamName.trim() : null;
+                        if (!winner) return acc;
+                        if (winner === "Team A" || winner === teams[0].name) {
+                            acc.teamA++;
+                        } else if (winner === "Team B" || winner === teams[1].name) {
+                            acc.teamB++;
+                        } else {
+                            console.warn(`Unrecognized winner team name: ${winner}`);
+                        }
                         return acc;
                     }, { teamA: 0, teamB: 0 });
 
-                    console.log("Wins:", wins);
+                    console.log("Calculated Wins:", wins);
 
-                    if (wins.teamA === 0 && wins.teamB === 0) {
-                        d3.select("#pie-error").text("No wins detected for either team.");
-                        return;
+                    if (wins.teamA === 0 && wins.teamB === 0 && rounds.length > 0) {
+                        d3.select("#pie-error").text("No definitive wins recorded for either team.");
                     }
 
                     const pieData = [
-                        { label: "Team A", value: wins.teamA },
-                        { label: "Team B", value: wins.teamB }
+                        { label: teams[0].name, value: wins.teamA },
+                        { label: teams[1].name, value: wins.teamB }
                     ];
 
                     const pie = d3.layout.pie()
@@ -402,7 +492,7 @@
                     const pieLegend = pieSvg.append("g")
                         .attr("class", "legend")
                         .attr("transform", `translate(150, -40)`);
-                    teams.forEach((team, i) => {
+                    pieData.forEach((data, i) => {
                         const legendRow = pieLegend.append("g")
                             .attr("transform", `translate(0, ${i * 20})`);
                         legendRow.append("rect")
@@ -410,18 +500,17 @@
                             .attr("y", 0)
                             .attr("width", 15)
                             .attr("height", 15)
-                            .attr("fill", team.color);
+                            .attr("fill", teams[i].color);
                         legendRow.append("text")
                             .attr("x", 20)
                             .attr("y", 12)
-                            .text(team.name);
+                            .text(data.label);
                         legendRow.attr("opacity", 0)
                             .transition()
                             .duration(1000)
                             .attr("opacity", 1);
                     });
 
-                    // Bar chart for top 5 weapons (Bottom-Right)
                     const barSvg = d3.select("#barchart").append("svg")
                         .attr("width", 600)
                         .attr("height", 400);
@@ -433,20 +522,64 @@
                     const barGroup = barSvg.append("g")
                         .attr("transform", `translate(${barMargin.left},${barMargin.top})`);
 
-                    const weaponKills = {};
+                    const weaponStats = {};
                     matchData.kills.forEach(kill => {
-                        weaponKills[kill.weaponName] = (weaponKills[kill.weaponName] || 0) + 1;
+                        const weapon = kill.weaponName;
+                        if (!weapon) return;
+                        if (!weaponStats[weapon]) {
+                            weaponStats[weapon] = { weapon, count: 0, headshots: 0 };
+                        }
+                        weaponStats[weapon].count += 1;
+                        if (kill.isHeadshot === true) {
+                            weaponStats[weapon].headshots += 1;
+                        }
                     });
-                    const weaponData = Object.entries(weaponKills)
-                        .sort((a, b) => b[1] - a[1])
-                        .slice(0, 5)
-                        .map(([weapon, count]) => ({ weapon, count }));
+
+                    const bodyshotsChecked = document.getElementById("bodyshots").checked;
+                    const headshotsChecked = document.getElementById("headshots").checked;
+                    let weaponData;
+
+                    if (bodyshotsChecked && !headshotsChecked) {
+                        weaponData = Object.values(weaponStats)
+                            .map(stat => ({
+                                weapon: stat.weapon,
+                                count: stat.count - stat.headshots,
+                                headshots: 0
+                            }))
+                            .filter(stat => stat.count > 0)
+                            .sort((a, b) => b.count - a.count)
+                            .slice(0, 5);
+                    } else if (headshotsChecked && !bodyshotsChecked) {
+                        weaponData = Object.values(weaponStats)
+                            .map(stat => ({
+                                weapon: stat.weapon,
+                                count: stat.headshots,
+                                headshots: stat.headshots
+                            }))
+                            .filter(stat => stat.count > 0)
+                            .sort((a, b) => b.count - a.count)
+                            .slice(0, 5);
+                    } else {
+                        weaponData = Object.values(weaponStats)
+                            .sort((a, b) => b.count - a.count)
+                            .slice(0, 5);
+                    }
+
+                    if (weaponData.length === 0) {
+                        barGroup.append("text")
+                            .attr("x", barWidth / 2)
+                            .attr("y", barHeight / 2)
+                            .attr("text-anchor", "middle")
+                            .attr("fill", "red")
+                            .text("No weapon kill data available.");
+                        return;
+                    }
 
                     const barXScale = d3.scale.ordinal()
                         .domain(weaponData.map(d => d.weapon))
                         .rangeRoundBands([0, barWidth], 0.1);
                     const barYScale = d3.scale.linear()
-                        .domain([0, d3.max(weaponData, d => d.count)])
+                        .domain([0, 50]) // Fixed y-axis range to match line chart
                         .range([barHeight, 0]);
 
                     const barXAxis = d3.svg.axis()
@@ -470,6 +603,7 @@
                     const barYAxis = d3.svg.axis()
                         .scale(barYScale)
                         .orient("left")
+                        .tickValues([0, 10, 20, 30, 40, 50])
                         .tickFormat(d => d);
                     barGroup.append("g")
                         .attr("class", "axis")
@@ -478,54 +612,546 @@
                         .transition()
                         .duration(1000)
                         .attr("opacity", 1);
+                    barGroup.append("text")
+                        .attr("transform", "rotate(-90)")
+                        .attr("y", -barMargin.left + 30)
+                        .attr("x", -barHeight / 2)
+                        .attr("dy", "1em")
+                        .style("text-anchor", "middle")
+                        .text("Kills");
 
-                    // Bars with animation (from bottom)
-                    barGroup.selectAll(".bar")
+                    const bars = barGroup.selectAll(".bar")
                         .data(weaponData)
                         .enter().append("rect")
                         .attr("class", "bar")
                         .attr("x", d => barXScale(d.weapon))
-                        .attr("y", barHeight) // Start from bottom
+                        .attr("y", barHeight)
                         .attr("width", barXScale.rangeBand())
                         .attr("height", 0)
-                        .attr("opacity", 0)
-                        .transition()
+                        .attr("opacity", 0);
+
+                    bars.transition()
                         .duration(1000)
-                        .attr("y", d => barYScale(d.count)) // Move to final y position
-                        .attr("height", d => barHeight - barYScale(d.count)) // Set final height
+                        .attr("y", d => barYScale(d.count * (50 / d3.max(weaponData, d => d.count) || 1)))
+                        .attr("height", d => barHeight - barYScale(d.count * (50 / d3.max(weaponData, d => d.count) || 1)))
                         .attr("opacity", 1);
 
-                    // Add kill count labels
-                    barGroup.selectAll(".label")
-                        .data(weaponData)
-                        .enter().append("text")
-                        .attr("class", "label")
-                        .attr("x", d => barXScale(d.weapon) + barXScale.rangeBand() / 2)
-                        .attr("y", d => barYScale(d.count) - 5)
-                        .attr("dy", "-0.35em")
-                        .attr("text-anchor", "middle")
-                        .text(d => d.count)
-                        .attr("opacity", 0)
-                        .transition()
-                        .delay(1000)
-                        .duration(500)
-                        .attr("opacity", 1);
+                    bars.on("mouseover", function(d) {
+                        const rect = this.getBoundingClientRect();
+                        const tooltip = d3.select("#tooltip");
+                        tooltip
+                            .style("left", (rect.left + rect.width / 2) + "px")
+                            .style("top", (rect.top - 40) + "px")
+                            .html(`Kills: ${d.count}<br>Headshots: ${d.headshots}`)
+                            .style("display", "block");
+                    })
+                    .on("mouseout", function() {
+                        d3.select("#tooltip").style("display", "none");
+                    });
                 })
                 .catch(error => {
                     console.error('Error loading or processing JSON:', error);
-                    d3.select("#error-message").text(`Error: ${error.message}`);
+                    d3.select("#error-message").text(`Error loading match data: ${error.message}`);
                 });
         }
 
-        // Populate dropdown with match options
+        function createLineChart(matchData, teams) {
+            const rounds = matchData.rounds || [];
+            if (rounds.length === 0) {
+                d3.select("#linechart").append("text")
+                    .attr("x", 10)
+                    .attr("y", 20)
+                    .attr("fill", "red")
+                    .text("No rounds data available for line chart.");
+                return;
+            }
+
+            const lineData = rounds.map((round, index) => ({
+                x: index + 1,
+                teamA: round.teamAStartMoney || 0,
+                teamB: round.teamBStartMoney || 0,
+                winner: round.winnerTeamName || "No winner"
+            }));
+
+            const svgWidth = 600;
+            const svgHeight = 400;
+            const margin = {top: 20, right: 20, bottom: 50, left: 50};
+            const chartWidth = svgWidth - margin.left - margin.right;
+            const chartHeight = svgHeight - margin.top - margin.bottom;
+
+            const lineSvg = d3.select("#linechart").append("svg")
+                .attr("width", svgWidth)
+                .attr("height", svgHeight);
+
+            const chartGroup = lineSvg.append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            const xScale = d3.scale.linear()
+                .domain([1, lineData.length])
+                .range([0, chartWidth]);
+            const xAxis = d3.svg.axis()
+                .scale(xScale)
+                .orient("bottom");
+            const xAxisGroup = chartGroup.append("g")
+                .attr("class", "axis")
+                .attr("transform", `translate(0,${chartHeight})`)
+                .call(xAxis);
+            xAxisGroup.selectAll("text")
+                .style("text-anchor", "end")
+                .attr("dx", "-.8em")
+                .attr("dy", ".15em")
+                .attr("transform", "rotate(-45)");
+            xAxisGroup
+                .attr("opacity", 0)
+                .transition()
+                .duration(1000)
+                .attr("opacity", 1);
+
+            const maxMoney = d3.max(lineData, d => Math.max(d.teamA, d.teamB)) / 1000 || 50;
+            const yScale = d3.scale.linear()
+                .domain([0, Math.ceil(maxMoney / 10) * 10])
+                .range([chartHeight, 0]);
+            const yAxis = d3.svg.axis()
+                .scale(yScale)
+                .orient("left")
+                .tickValues([0, 10, 20, 30, 40, 50])
+                .tickFormat(d => d === 0 ? "0" : `${d}k`);
+            chartGroup.append("g")
+                .attr("class", "axis")
+                .call(yAxis)
+                .attr("opacity", 0)
+                .transition()
+                .duration(1000)
+                .attr("opacity", 1);
+
+            const xTicks = xScale.ticks ? xScale.ticks(lineData.length) : d3.range(1, lineData.length + 1);
+            const yTicks = yScale.ticks ? yScale.ticks(5) : [0, 10, 20, 30, 40, 50];
+
+            yTicks.forEach(yVal => {
+                chartGroup.append("line")
+                    .attr("x1", 0)
+                    .attr("y1", yScale(yVal))
+                    .attr("x2", chartWidth)
+                    .attr("y2", yScale(yVal))
+                    .attr("stroke", "#ccc")
+                    .attr("stroke-width", 1)
+                    .attr("opacity", 0)
+                    .transition()
+                    .duration(1000)
+                    .attr("opacity", 0.85);
+            });
+
+            xTicks.forEach(xVal => {
+                chartGroup.append("line")
+                    .attr("x1", xScale(xVal))
+                    .attr("y1", 0)
+                    .attr("x2", xScale(xVal))
+                    .attr("y2", chartHeight)
+                    .attr("stroke", "#ccc")
+                    .attr("stroke-width", 1)
+                    .attr("opacity", 0)
+                    .transition()
+                    .duration(1000)
+                    .attr("opacity", 0.85);
+            });
+
+            // Create team A line (initially hidden)
+            const lineA = d3.svg.line()
+                .x(d => xScale(d.x))
+                .y(d => yScale(d.teamA / 1000));
+            const pathA = chartGroup.append("path")
+                .datum(lineData)
+                .attr("class", "line-teamA")
+                .attr("fill", "none")
+                .attr("stroke", teams[0].color)
+                .attr("stroke-width", 1.2)
+                .attr("d", lineA(lineData))
+                .style("display", "none"); // Initially hidden
+
+            // Create team B line (initially hidden)
+            const lineB = d3.svg.line()
+                .x(d => xScale(d.x))
+                .y(d => yScale(d.teamB / 1000));
+            const pathB = chartGroup.append("path")
+                .datum(lineData)
+                .attr("class", "line-teamB")
+                .attr("fill", "none")
+                .attr("stroke", teams[1].color)
+                .attr("stroke-width", 1.2)
+                .attr("d", lineB(lineData))
+                .style("display", "none"); // Initially hidden
+
+            // Create data points for team A (initially hidden)
+            chartGroup.selectAll(".data-point-teamA")
+                .data(lineData)
+                .enter().append("circle")
+                .attr("class", "data-point data-point-teamA")
+                .attr("cx", d => xScale(d.x))
+                .attr("cy", d => yScale(d.teamA / 1000))
+                .attr("r", 3)
+                .style("display", "none"); // Initially hidden
+
+            // Create data points for team B (initially hidden)
+            chartGroup.selectAll(".data-point-teamB")
+                .data(lineData)
+                .enter().append("circle")
+                .attr("class", "data-point data-point-teamB")
+                .attr("cx", d => xScale(d.x))
+                .attr("cy", d => yScale(d.teamB / 1000))
+                .attr("r", 3)
+                .style("display", "none"); // Initially hidden
+
+            // Add tooltips for team A data points
+            chartGroup.selectAll(".data-point-teamA")
+                .on("mouseover", function(d) {
+                    const rect = this.getBoundingClientRect();
+                    const tooltip = d3.select("#tooltip");
+                    const didWin = (d.winner === teams[0].name || d.winner === "Team A") ? "Yes" : "No";
+                    tooltip
+                        .style("left", (rect.left + rect.width / 2) + "px")
+                        .style("top", (rect.top - 40) + "px")
+                        .html(`Round: ${d.x}<br>${teams[0].name} Money: $${d.teamA}<br>Won Round: ${didWin}`)
+                        .style("display", "block");
+                })
+                .on("mouseout", function() {
+                    d3.select("#tooltip").style("display", "none");
+                });
+
+            // Add tooltips for team B data points
+            chartGroup.selectAll(".data-point-teamB")
+                .on("mouseover", function(d) {
+                    const rect = this.getBoundingClientRect();
+                    const tooltip = d3.select("#tooltip");
+                    const didWin = (d.winner === teams[1].name || d.winner === "Team B") ? "Yes" : "No";
+                    tooltip
+                        .style("left", (rect.left + rect.width / 2) + "px")
+                        .style("top", (rect.top - 40) + "px")
+                        .html(`Round: ${d.x}<br>${teams[1].name} Money: $${d.teamB}<br>Won Round: ${didWin}`)
+                        .style("display", "block");
+                })
+                .on("mouseout", function() {
+                    d3.select("#tooltip").style("display", "none");
+                });
+
+            // Add axis labels
+            chartGroup.append("text")
+                .attr("transform", `translate(${chartWidth/2},${chartHeight + margin.bottom - 10})`)
+                .style("text-anchor", "middle")
+                .text("Round")
+                .attr("opacity", 0)
+                .transition()
+                .duration(1000)
+                .attr("opacity", 1);
+                
+            chartGroup.append("text")
+                .attr("transform", "rotate(-90)")
+                .attr("y", -5 - margin.left)
+                .attr("x", 0 - (chartHeight / 2))
+                .attr("dy", "1em")
+                .style("text-anchor", "middle")
+                .text("Money ($)")
+                .attr("opacity", 0)
+                .transition()
+                .duration(1000)
+                .attr("opacity", 1);
+
+            // Add legend
+            const lineLegend = chartGroup.append("g")
+                .attr("class", "legend")
+                .attr("transform", `translate(${chartWidth - 100}, 10)`);
+                
+            teams.forEach((team, i) => {
+                const legendRow = lineLegend.append("g")
+                    .attr("transform", `translate(0, ${i * 20})`);
+                legendRow.append("rect")
+                    .attr("x", 0)
+                    .attr("y", 0)
+                    .attr("width", 15)
+                    .attr("height", 15)
+                    .attr("fill", team.color);
+                legendRow.append("text")
+                    .attr("x", 20)
+                    .attr("y", 12)
+                    .text(team.name);
+                legendRow.attr("opacity", 0)
+                    .transition()
+                    .duration(1000)
+                    .attr("opacity", 1);
+            });
+
+            // Add a message to prompt user to select a team
+            chartGroup.append("text")
+                .attr("class", "prompt-message")
+                .attr("x", chartWidth / 2)
+                .attr("y", chartHeight / 2)
+                .attr("text-anchor", "middle")
+                .attr("fill", "#666")
+                .style("font-size", "16px")
+                .text("Select a team from the dropdown to view the line chart");
+
+            // Handle team selection changes
+            teamSelector.on("change", function() {
+                const selectedTeam = d3.select(this).property("value");
+                updateLineChart(selectedTeam, teams);
+            });
+
+            // Function to update line chart based on team selection
+            function updateLineChart(selectedTeam, teams) {
+                // Hide the prompt message when a selection is made
+                chartGroup.select(".prompt-message").style("display", "none");
+                
+                if (selectedTeam === "both") {
+                    // Show both teams with animation
+                    d3.select(".line-teamA")
+                        .style("display", "block")
+                        .attr("stroke-dasharray", function() { return this.getTotalLength(); })
+                        .attr("stroke-dashoffset", function() { return this.getTotalLength(); })
+                        .transition()
+                        .duration(2000)
+                        .attr("stroke-dashoffset", 0);
+                        
+                    d3.select(".line-teamB")
+                        .style("display", "block")
+                        .attr("stroke-dasharray", function() { return this.getTotalLength(); })
+                        .attr("stroke-dashoffset", function() { return this.getTotalLength(); })
+                        .transition()
+                        .duration(2000)
+                        .attr("stroke-dashoffset", 0);
+                        
+                    d3.selectAll(".data-point-teamA")
+                        .style("display", "block")
+                        .attr("opacity", 0)
+                        .transition()
+                        .duration(1000)
+                        .attr("opacity", 0.7);
+                        
+                    d3.selectAll(".data-point-teamB")
+                        .style("display", "block")
+                        .attr("opacity", 0)
+                        .transition()
+                        .duration(1000)
+                        .attr("opacity", 0.7);
+                } else if (selectedTeam === "teamA") {
+                    // Show only team A with animation
+                    d3.select(".line-teamA")
+                        .style("display", "block")
+                        .attr("stroke-dasharray", function() { return this.getTotalLength(); })
+                        .attr("stroke-dashoffset", function() { return this.getTotalLength(); })
+                        .transition()
+                        .duration(2000)
+                        .attr("stroke-dashoffset", 0);
+                        
+                    d3.select(".line-teamB").style("display", "none");
+                    
+                    d3.selectAll(".data-point-teamA")
+                        .style("display", "block")
+                        .attr("opacity", 0)
+                        .transition()
+                        .duration(1000)
+                        .attr("opacity", 0.7);
+                        
+                    d3.selectAll(".data-point-teamB").style("display", "none");
+                } else if (selectedTeam === "teamB") {
+                    // Show only team B with animation
+                    d3.select(".line-teamA").style("display", "none");
+                    
+                    d3.select(".line-teamB")
+                        .style("display", "block")
+                        .attr("stroke-dasharray", function() { return this.getTotalLength(); })
+                        .attr("stroke-dashoffset", function() { return this.getTotalLength(); })
+                        .transition()
+                        .duration(2000)
+                        .attr("stroke-dashoffset", 0);
+                        
+                    d3.selectAll(".data-point-teamA").style("display", "none");
+                    
+                    d3.selectAll(".data-point-teamB")
+                        .style("display", "block")
+                        .attr("opacity", 0)
+                        .transition()
+                        .duration(1000)
+                        .attr("opacity", 0.7);
+                }
+            }
+        }
+
+        function updateBarChart(matchData) {
+            d3.select("#error-message").text("");
+            const barSvg = d3.select("#barchart").select("svg");
+            const barGroup = barSvg.select("g");
+
+            const weaponStats = {};
+            const selectedPlayer = d3.select("#player-selector").property("value");
+            
+            matchData.kills.forEach(kill => {
+                // Skip if not the selected player
+                if (selectedPlayer !== "all" && kill.killerName !== selectedPlayer) return;
+                
+                const weapon = kill.weaponName;
+                if (!weapon) return;
+                if (!weaponStats[weapon]) {
+                    weaponStats[weapon] = { weapon, count: 0, headshots: 0 };
+                }
+                weaponStats[weapon].count += 1;
+                if (kill.isHeadshot === true) {
+                    weaponStats[weapon].headshots += 1;
+                }
+            });
+
+            const bodyshotsChecked = document.getElementById("bodyshots").checked;
+            const headshotsChecked = document.getElementById("headshots").checked;
+            let weaponData;
+
+            if (bodyshotsChecked && !headshotsChecked) {
+                weaponData = Object.values(weaponStats)
+                    .map(stat => ({
+                        weapon: stat.weapon,
+                        count: stat.count - stat.headshots,
+                        headshots: 0
+                    }))
+                    .filter(stat => stat.count > 0)
+                    .sort((a, b) => b.count - a.count)
+                    .slice(0, 5);
+            } else if (headshotsChecked && !bodyshotsChecked) {
+                weaponData = Object.values(weaponStats)
+                    .map(stat => ({
+                        weapon: stat.weapon,
+                        count: stat.headshots,
+                        headshots: stat.headshots
+                    }))
+                    .filter(stat => stat.count > 0)
+                    .sort((a, b) => b.count - a.count)
+                    .slice(0, 5);
+            } else {
+                weaponData = Object.values(weaponStats)
+                    .sort((a, b) => b.count - a.count)
+                    .slice(0, 5);
+            }
+
+            if (weaponData.length === 0) {
+                barGroup.selectAll(".bar").remove();
+                barGroup.selectAll(".axis").remove();
+                barGroup.append("text")
+                    .attr("x", 300)
+                    .attr("y", 200)
+                    .attr("text-anchor", "middle")
+                    .attr("fill", "red")
+                    .text("No weapon kill data available.");
+                return;
+            }
+
+            const barMargin = { top: 25, right: 20, bottom: 50, left: 100 };
+            const barWidth = 600 - barMargin.left - barMargin.right;
+            const barHeight = 400 - barMargin.top - barMargin.bottom;
+
+            // Calculate scales based on current data
+            const maxKills = d3.max(weaponData, d => d.count) || 1;
+            
+            const barXScale = d3.scale.ordinal()
+                .domain(weaponData.map(d => d.weapon))
+                .rangeRoundBands([0, barWidth], 0.1);
+            
+            const barYScale = d3.scale.linear()
+                .domain([0, maxKills]) // Use actual max, not fixed 50
+                .range([barHeight, 0]);
+
+            // Remove old axes
+            barGroup.selectAll(".axis").remove();
+            
+            // Create new X-axis
+            const barXAxis = d3.svg.axis()
+                .scale(barXScale)
+                .orient("bottom")
+                .tickFormat(d => d);
+            barGroup.append("g")
+                .attr("class", "axis")
+                .attr("transform", `translate(0,${barHeight})`)
+                .call(barXAxis)
+                .attr("opacity", 0)
+                .transition()
+                .duration(750)
+                .attr("opacity", 1)
+                .selectAll("text")
+                .style("text-anchor", "end")
+                .attr("dx", "-.8em")
+                .attr("dy", ".15em")
+                .attr("transform", "rotate(-45)");
+
+            // Create new Y-axis with proper ticks
+            const tickCount = 5;
+            const tickStep = Math.ceil(maxKills / tickCount);
+            const tickValues = d3.range(0, maxKills + tickStep, tickStep);
+
+            const barYAxis = d3.svg.axis()
+                .scale(barYScale)
+                .orient("left")
+                .tickValues(tickValues)
+                .tickFormat(d => d);
+            barGroup.append("g")
+                .attr("class", "axis")
+                .call(barYAxis)
+                .attr("opacity", 0)
+                .transition()
+                .duration(750)
+                .attr("opacity", 1);
+
+            // Update bars with correct scaling
+            const bars = barGroup.selectAll(".bar")
+                .data(weaponData, d => d.weapon);
+
+            bars.exit()
+                .transition()
+                .duration(500)
+                .attr("y", barHeight)
+                .attr("height", 0)
+                .attr("opacity", 0)
+                .remove();
+
+            const newBars = bars.enter().append("rect")
+                .attr("class", "bar")
+                .attr("x", d => barXScale(d.weapon))
+                .attr("width", barXScale.rangeBand())
+                .attr("y", barHeight)
+                .attr("height", 0)
+                .attr("opacity", 0);
+
+            // Fixed bar positioning - direct mapping without extra scaling
+            bars.transition()
+                .duration(1000)
+                .attr("x", d => barXScale(d.weapon))
+                .attr("width", barXScale.rangeBand())
+                .attr("y", d => barYScale(d.count)) // Direct mapping
+                .attr("height", d => barHeight - barYScale(d.count)) // Direct mapping
+                .attr("opacity", 1);
+
+            // Keep existing tooltip code
+            bars.on("mouseover", function(d) {
+                const rect = this.getBoundingClientRect();
+                const tooltip = d3.select("#tooltip");
+                tooltip
+                    .style("left", (rect.left + rect.width / 2) + "px")
+                    .style("top", (rect.top - 40) + "px")
+                    .html(`Kills: ${d.count}<br>Headshots: ${d.headshots}`)
+                    .style("display", "block");
+            })
+            .on("mouseout", function() {
+                d3.select("#tooltip").style("display", "none");
+            });
+        }
+
         Promise.all(matchFiles.map(file => fetch(file).then(res => res.json())))
             .then(datas => {
                 const options = matchFiles.map((file, i) => {
                     const data = datas[i];
-                    const teamsInMatch = [...new Set(data.rounds.map(round => round.winnerTeamName).filter(name => name))];
-                    const label = teamsInMatch.length === 2 ? `${teamsInMatch[0]} VS ${teamsInMatch[1]} - Game 1` : file;
-                    return { file, label };
+                    const mapName = file.replace(/falcons-vs-gamerlegion-m\d+-|.json/g, '').replace(/_/g, ' ');
+                    const formattedMapName = mapName.charAt(0).toUpperCase() + mapName.slice(1);
+                    return {
+                        file,
+                        label: `${data.teamA?.name || "Team A"} vs ${data.teamB?.name || "Team B"} - ${formattedMapName}`
+                    };
                 });
+
+                
 
                 matchSelector.selectAll("option")
                     .data(options)
@@ -534,14 +1160,19 @@
                     .attr("value", d => d.file)
                     .text(d => d.label);
 
-                // Load the first match by default
-                loadMatch(matchFiles[0]);
+                if (matchFiles.length > 0) {
+                    loadMatch(matchFiles[0]);
+                } else {
+                    d3.select("#error-message").text("No match files defined.");
+                }
 
-                // Update charts when a new match is selected
                 matchSelector.on("change", function() {
                     const selectedFile = d3.select(this).property("value");
                     loadMatch(selectedFile);
                 });
+
+                document.getElementById("bodyshots").addEventListener("change", () => updateBarChart(currentMatchData));
+                document.getElementById("headshots").addEventListener("change", () => updateBarChart(currentMatchData));
             })
             .catch(error => {
                 console.error('Error loading match files for dropdown:', error);
