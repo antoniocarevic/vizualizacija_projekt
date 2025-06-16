@@ -376,8 +376,7 @@
             }
         };
 
-
-        function csDemoManagerCoordTransform(gameX, gameY, mapConfig, radarSize = 1024) {
+        function coordTransform(gameX, gameY, mapConfig, radarSize = 1024) {
             const worldX = gameX - mapConfig.pos_x;
             const worldY = mapConfig.pos_y - gameY;
             
@@ -408,7 +407,7 @@
         }
 
         function gameToImageCoords(gameX, gameY, mapConfig, imageWidth, imageHeight) {
-            const radarCoords = csDemoManagerCoordTransform(gameX, gameY, mapConfig);
+            const radarCoords = coordTransform(gameX, gameY, mapConfig);
             const imageCoords = scaleRadarToImage(radarCoords, imageWidth, imageHeight);
             
             return {
@@ -470,7 +469,7 @@
                 .then(r => r.json())
                 .then(data => {
                     currentMatchData = data;
-                    const mapName = file.replace(/falcons-vs-gamerlegion-m\d+-|.json/g, '').replace(/de_/, '');
+                    const mapName = data.mapName.replace(/de_/, '');
                     const mapConfig = MAP_CONFIGS[mapName];
                     currentMapConfig = mapConfig;
                     
@@ -1137,7 +1136,7 @@
             .then(datas => {
                 const options = matchFiles.map((file, i) => {
                     const data = datas[i];
-                    const mapName = file.replace(/falcons-vs-gamerlegion-m\d+-|.json/g, '').replace(/_/g, ' ');
+                    const mapName = data.mapName.replace(/^de_/, '');
                     const formattedMapName = mapName.charAt(0).toUpperCase() + mapName.slice(1);
                     return {
                         file,
